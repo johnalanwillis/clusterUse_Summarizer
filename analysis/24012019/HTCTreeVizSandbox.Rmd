@@ -1,0 +1,207 @@
+---
+title: "htcDataUseExploration24012019"
+author: "John Alan Willis"
+date: "1/24/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+This document is an experimental testbed for combining the data.tree package with various vizualization tools 
+
+first we'll load a bunch of packages
+
+```{r loadPackages}
+library(data.tree)
+library(collapsibleTree)
+library(tidyverse)
+library(splitstackshape)
+library(treemap)
+library(d3treeR)
+library(r2d3)
+library(networkD3)
+```
+
+
+Next we'll build a simple df from the project directory structure 
+this is exactly like the example shown at https://cran.r-project.org/web/packages/data.tree/vignettes/applications.html#file-explorer-system-utilities
+
+```{r readInFileStructure}
+path <- "../.."
+files <- list.files(path = path, 
+                    recursive = TRUE,
+                    include.dirs = FALSE) 
+
+df <- data.frame(
+      filename = sapply(files, 
+                        function(fl) paste0("data.tree","/",fl)
+      ), 
+      file.info(paste(path, files, sep = "/")),
+      stringsAsFactors = FALSE
+    )
+ 
+print(head(df)[c(1,2,3,4)], row.names = FALSE)
+
+
+```
+
+
+having generated the DF, lets now incorporate it into a tree
+
+```{r createDataTree}
+fileStructure <- as.Node(df, pathName = "filename")
+fileStructure$leafCount / (fileStructure$totalCount - fileStructure$leafCount)
+
+print(fileStructure, "mode", "size", limit = 25)
+plot(fileStructure)
+
+#plot with networkD3
+fileStructureList <- ToListExplicit(fileStructure, unname = TRUE)
+radialNetwork(fileStructureList)
+
+```
+
+
+```{r filteredSummary}
+filteredSummary <- filter(fileSummary, FileSizeBytes > 20000000)
+filteredTree <- as.Node(filteredSummary, pathName = "Filepath")
+print(filteredTree, limit = 40)
+plot(filteredTree)
+
+
+#plot with networkD3
+fileStructureList <- ToListExplicit(filteredTree, unname = TRUE)
+radialNetwork(fileStructureList)
+```
+next lets make a tree with the actual from mobydisk
+
+```{r testDataVizout}
+fafqbamList <- read_delim('../../outputs/2019-01-18/findFaFqBamOutputHumanReadable.txt', " ")
+directoriesList <- read_tsv('../../outputs/2019-01-18/directoriesList24012019.txt')
+fileSummary <- read_tsv('../../outputs/2019-01-18/fullFileSummarySortedBySize.tsv')
+filteredFileSummary <- fileSummary %>%
+  filter(FileSizeBytes >100000)
+fileSummarTree <- as.Node(filteredFileSummary, pathName = 'Filepath')
+
+print(fileSummarTree, "mode", "size", limit = 25)
+plot(fileSummarTree)
+
+#plot with networkD3
+fileStructureList <- ToListExplicit(fileStructure, unname = TRUE)
+radialNetwork(fileStructureList)
+```
+
+lets do a treemap by converting the filteredTree to a tidy df with columnar hierarchy designation
+
+```{r treemap}
+
+fileSummForTreemap <- ToDataFrameTypeCol(filteredTree)
+head(fileSummForTreemap)
+
+fileSummForTreemap2 <- cSplit(fileSummary, "Filepath", sep = '/')
+#fileSummForTreemap2[,12:18] <- as.character(fileSummForTreemap2[,12:18])
+fileSummForTreemap2[] <- lapply(fileSummForTreemap2, as.character)
+fileSummForTreemap2[,"FileSizeBytes"] <- lapply(fileSummForTreemap2[,"FileSizeBytes"], as.double)
+columnsOfInterest <- paste0('Filepath_', 10:24)
+treemap(fileSummForTreemap2[FileSizeBytes >= 1000000,], index = columnsOfInterest[1:4], vSize = 'FileSizeBytes', type='index')
+
+```
+
+
+letes build a full viz script
+
+```{r dataVizScript}
+fileSummary <- read_tsv('fullFileSummarySortedBySize.tsv')
+
+fileSummForTreemap2 <- cSplit(fileSummary, "Filepath", sep = '/')
+
+fileSummForTreemap2[] <- lapply(fileSummForTreemap2, as.character)
+fileSummForTreemap2[,"FileSizeBytes"] <- lapply(fileSummForTreemap2[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- paste0('Filepath_', 10:24)
+treemap(fileSummForTreemap2[FileSizeBytes >= 100000,], index = columnsOfInterest[1:4], vSize = 'FileSizeBytes', type='index')
+d3treeout <- d3tree2(treemap(fileSummForTreemap2[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+save_d3_html(d3treeout, file = "JAWFileStructureViz.html", selfcontained = TRUE)
+```
+
+
+```{r visualizeByUser}
+nolanSummary <- fileSummary %>%
+  filter(grepl("nolan", User), FileSizeBytes > 10000 )
+
+filteredTree <- as.Node(nolanSummary, pathName = "Filepath")
+
+fileSummForTreemap <- ToDataFrameTypeCol(filteredTree)
+head(fileSummForTreemap)
+
+fileSummForTreemap2 <- cSplit(nolanSummary, "Filepath", sep = '/')
+#fileSummForTreemap2[,12:18] <- as.character(fileSummForTreemap2[,12:18])
+fileSummForTreemap2[] <- lapply(fileSummForTreemap2, as.character)
+fileSummForTreemap2[,"FileSizeBytes"] <- lapply(fileSummForTreemap2[,"FileSizeBytes"], as.double)
+columnsOfInterest <- paste0('Filepath_', 10:24)
+treemap(fileSummForTreemap2[FileSizeBytes >= 100000,], index = columnsOfInterest[1:4], vSize = 'FileSizeBytes', type='index')
+
+d3treeout <- d3tree2(treemap(fileSummForTreemap2[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+save_d3_html(d3treeout, file = "JAWFileStructureViz.html", selfcontained = TRUE)
+
+
+```
+
+Lets more formally explore this dataset
+
+```{r exploreExperiments}
+colnames(fileSummary)
+colnames(directoriesList) <- "Filepath"
+directoriesList2 <- directoriesList %>%
+  data.frame() %>%
+  mutate(Filepath=as.character(Filepath)) %>%
+  mutate(Filepath=map(.$Filepath, str_replace, pattern = "......", replacement =  "/mnt/mobydisk/pan/genomics/data/alee/"))
+
+head(directoriesList)
+dim(directoriesList)
+
+colnames(fafqbamList) <-c("fileSize", "Filepath")
+
+fafqbamList2 <- fafqbamList %>%
+  data.frame() %>%
+  mutate(Filepath=as.character(Filepath)) %>%
+  mutate(Filepath=map(.$Filepath, str_replace, pattern = "......", replacement =  "/mnt/mobydisk/pan/genomics/data/alee/"))
+
+
+
+#first filter the full fileSummary dataframe by keeping only directories
+
+directoriesSummary <- fileSummary[fileSummary$Filepath %in% directoriesList2$Filepath,]
+#directoriesSummary <- inner_join(fileSummary, directoriesList2)
+
+byUserDiskUseSummary <- directoriesSummary %>%
+  group_by(User) %>% 
+  summarize("Size"=sum(FileSizeBytes)) 
+
+ggplot(byUserDiskUseSummary) +
+  geom_col(mapping = aes(User, Size)) +
+  coord_flip()
+  
+byUserFileCountSummary <- directoriesSummary %>%
+  group_by(User) %>% 
+  summarize("Files"=n()) 
+
+ggplot(byUserFileCountSummary) +
+  geom_col(mapping = aes(User, Files)) +
+  coord_flip()
+
+joinedDUFC <- full_join(byUserDiskUseSummary, byUserFileCountSummary) %>%
+  mutate(ratio=Size/Files)
+
+ggplot(joinedDUFC) +
+  geom_point(mapping = aes(Size, Files, color=User))
+             
+```
+
+```{r exploreByUser}
+
+```

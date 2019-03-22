@@ -1,0 +1,653 @@
+---
+title: "HTCDiskUseExploration25012019"
+author: "John Alan Willis"
+date: "1/25/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loadPackages}
+library(data.tree)
+library(collapsibleTree)
+library(tidyverse)
+library(splitstackshape)
+library(treemap)
+library(d3treeR)
+library(r2d3)
+library(networkD3)
+```
+
+
+```{r testDataVizout}
+fafqbamList <- read_delim('../../outputs/2019-01-18/findFaFqBamOutput_26012019.txt', " ")
+directoriesList <- read_tsv('../../outputs/2019-01-18/directoriesList24012019.txt')
+fileSummary <- read_tsv('../../outputs/2019-01-18/fullFileSummarySortedBySize.tsv')
+filteredFileSummary <- fileSummary %>%
+  filter(FileSizeBytes >100000)
+
+```
+
+Lets more formally explore this dataset
+
+```{r exploreExperiments}
+colnames(fileSummary)
+colnames(directoriesList) <- "Filepath"
+directoriesList2 <- directoriesList %>%
+  data.frame() %>%
+  mutate(Filepath=as.character(Filepath)) %>%
+  mutate(Filepath=map(.$Filepath, str_replace, pattern = "......", replacement =  "/mnt/mobydisk/pan/genomics/data/alee/"))
+
+head(directoriesList)
+dim(directoriesList)
+
+colnames(fafqbamList) <-c("Filepath")
+
+fafqbamList2 <- fafqbamList %>%
+  data.frame() %>%
+  mutate(Filepath=as.character(Filepath)) %>%
+  mutate(Filepath=map(.$Filepath, str_replace, pattern = "......", replacement =  "/mnt/mobydisk/pan/genomics/data/alee/"))
+
+
+
+#first filter the full fileSummary dataframe by keeping only directories
+
+directoriesSummary <- fileSummary[fileSummary$Filepath %in% directoriesList2$Filepath,]
+#directoriesSummary <- inner_join(fileSummary, directoriesList2)
+
+byUserDiskUseSummary <- directoriesSummary %>%
+  group_by(User) %>% 
+  summarize("Size"=sum(FileSizeBytes)) 
+
+ggplot(byUserDiskUseSummary) +
+  geom_col(mapping = aes(User, Size)) +
+  coord_flip()
+  
+byUserFileCountSummary <- directoriesSummary %>%
+  group_by(User) %>% 
+  summarize("Files"=n()) 
+
+ggplot(byUserFileCountSummary) +
+  geom_col(mapping = aes(User, Files)) +
+  coord_flip()
+
+joinedDUFC <- full_join(byUserDiskUseSummary, byUserFileCountSummary) %>%
+  mutate(ratio=Size/Files)
+
+ggplot(joinedDUFC) +
+  geom_point(mapping = aes(Size, Files, color=User))
+
+
+#Next filter the full fileSummary dataframe by keeping only fa, fq, bam files
+
+fafqbamSummary <- fileSummary[fileSummary$Filepath %in% fafqbamList2$Filepath,]
+#fafqbamSummary <- inner_join(fileSummary, fafqbamList2)
+
+byUserRawFileSummary <- fafqbamSummary %>%
+  group_by(User) %>% 
+  summarize("Size"=sum(FileSizeBytes)) 
+
+ggplot(byUserRawFileSummary) +
+  geom_col(mapping = aes(User, Size)) +
+  coord_flip()
+  
+byUserRawFileCountSummary <- fafqbamSummary %>%
+  group_by(User) %>% 
+  summarize("Files"=n()) 
+
+ggplot(byUserRawFileCountSummary) +
+  geom_col(mapping = aes(User, Files)) +
+  coord_flip()
+
+joinedRawDatFc <- full_join(byUserRawFileSummary, byUserRawFileCountSummary) %>%
+  mutate(ratio=Size/Files)
+
+ggplot(joinedRawDatFc) +
+  geom_point(mapping = aes(Size, Files, color=User))
+             
+```
+
+
+
+
+```{r TreeMapRoot}
+
+fileSummForTreemap2 <- cSplit(directoriesSummary, "Filepath", sep = '/')
+
+fileSummForTreemap2[] <- lapply(fileSummForTreemap2, as.character)
+fileSummForTreemap2[,"FileSizeBytes"] <- lapply(fileSummForTreemap2[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(fileSummForTreemap2[FileSizeBytes >= 100000,], index = columnsOfInterest[1:4], vSize = 'FileSizeBytes',vColor = 'User', type='index')
+d3treeout <- d3tree2(treemap(fileSummForTreemap2[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeout, file = "JAWFileStructureViz.html", selfcontained = TRUE)
+```
+
+
+Nolan File Summary
+```{r byUserFileSummarynolan}
+
+nolanPruneFun <- function(x, cutoff = 0.01, maxDirs = 10) {
+  if (isNotLeaf(x)) return (TRUE)
+  if (x$position > maxDirs) return (FALSE)
+  return (x$FileSizeBytes > (100000))
+}
+
+getwd()
+
+nolanDirectoriesSummary <- directoriesSummary %>%
+  filter(User =="nolan") %>%
+  arrange(desc(FileSizeBytes)) 
+
+dirSummaryTreeNolan <- as.Node(nolanDirectoriesSummary, pathName = 'Filepath')
+
+
+dirSummaryTreeNolan$Do(function(x) {
+        x$RawDataSize <- Aggregate(node = x,
+        attribute = "FileSizeBytes",
+        aggFun = sum)
+        }, 
+     traversal = "post-order")
+
+Sort(dirSummaryTreeNolan, attribute = "RawDataSize", decreasing = TRUE, recursive = TRUE)
+#print(dirSummaryTreeNolan, "RawDataSize", pruneMethod = "dist", limit = 20)
+
+treeCloneNolandirs <- Clone(dirSummaryTreeNolan, pruneFun = nolanPruneFun)
+#print(treeCloneNolandirs, "FileSizeBytes", pruneMethod = "simple", limit = 20)
+
+
+dirSummForTreemapNolan <- cSplit(nolanDirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemapNolan[] <- lapply(dirSummForTreemapNolan, as.character)
+dirSummForTreemapNolan[,"FileSizeBytes"] <- lapply(dirSummForTreemapNolan[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemapNolan[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutNolanDirs <- d3tree2(treemap(dirSummForTreemapNolan[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutNolanDirs, file = "NolanDirStructureViz.html", selfcontained = TRUE)
+
+nolanfafqbamSummary <- fafqbamSummary %>%
+  filter(User =="nolan") %>%
+  arrange(desc(FileSizeBytes)) 
+
+#write_tsv(nolanfafqbamSummary, "nolanFaFqBAMfilesSummary.tsv")
+
+fafqbamSummaryTreeNolan <- as.Node(nolanfafqbamSummary, pathName = 'Filepath')
+
+fafqbamSummaryTreeNolan$Do(function(x) {
+        x$RawDataSize <- Aggregate(node = x,
+        attribute = "FileSizeBytes",
+        aggFun = sum)
+        }, 
+     traversal = "post-order")
+
+
+
+Sort(fafqbamSummaryTreeNolan, attribute = "RawDataSize", decreasing = TRUE, recursive = TRUE)
+#print(fafqbamSummaryTreeNolan, "RawDataSize", pruneMethod = "dist", limit = 20)
+
+treeCloneNolanfafqbam <- Clone(fafqbamSummaryTreeNolan, pruneFun = nolanPruneFun)
+#print(treeCloneNolanfafqbam, "FileSizeBytes", pruneMethod = "simple", limit = 20)
+
+fafqbamSummForTreemapNolan <- cSplit(nolanfafqbamSummary, "Filepath", sep = '/')
+
+fafqbamSummForTreemapNolan[] <- lapply(fafqbamSummForTreemapNolan, as.character)
+fafqbamSummForTreemapNolan[,"FileSizeBytes"] <- lapply(fafqbamSummForTreemapNolan[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(fafqbamSummForTreemapNolan[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutNolanfafqbams <- d3tree2(treemap(fafqbamSummForTreemapNolan[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutNolanfafqbams, file = "NolanfafqbamStructureViz.html", selfcontained = TRUE)
+
+radialNetwork(ToListExplicit(fafqbamSummaryTreeNolan, unname = TRUE), height = 4000, width = 4000)
+diagonalNetwork(ToListExplicit(fafqbamSummaryTreeNolan, unname = TRUE), height = 18000, width = 4000, fontSize = 15)
+```
+
+
+#Nick File Summary
+```{r byUserFileSummarynick}
+
+nickDirectoriesSummary <- directoriesSummary %>%
+  filter(User =="nick") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+dirSummForTreemapnick <- cSplit(nickDirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemapnick[] <- lapply(dirSummForTreemapnick, as.character)
+dirSummForTreemapnick[,"FileSizeBytes"] <- lapply(dirSummForTreemapnick[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemapnick[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutnickDirs <- d3tree2(treemap(dirSummForTreemapnick[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutnickDirs, file = "nickDirStructureViz.html", selfcontained = TRUE)
+
+nickfafqbamSummary <- fafqbamSummary %>%
+  filter(User =="nick") %>%
+  arrange(desc(FileSizeBytes)) 
+
+fafqbamSummaryTreenick <- as.Node(nickfafqbamSummary, pathName = 'Filepath')
+
+fafqbamSummaryTreenick$Do(function(x) {
+        x$RawDataSize <- Aggregate(node = x,
+        attribute = "FileSizeBytes",
+        aggFun = sum)
+        }, 
+     traversal = "post-order")
+
+Sort(fafqbamSummaryTreenick, attribute = "RawDataSize", decreasing = TRUE, recursive = TRUE)
+print(fafqbamSummaryTreenick, "RawDataSize", pruneMethod = "dist", limit = 20)
+
+
+fafqbamSummForTreemapnick <- cSplit(nickfafqbamSummary, "Filepath", sep = '/')
+
+fafqbamSummForTreemapnick[] <- lapply(fafqbamSummForTreemapnick, as.character)
+fafqbamSummForTreemapnick[,"FileSizeBytes"] <- lapply(fafqbamSummForTreemapnick[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(fafqbamSummForTreemapnick[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutnickfafqbams <- d3tree2(treemap(fafqbamSummForTreemapnick[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutnickfafqbams, file = "nickfafqbamStructureViz.html", selfcontained = TRUE)
+
+
+radialNetwork(ToListExplicit(fafqbamSummaryTreenick, unname = TRUE), height = 1000, width = 1000)
+diagonalNetwork(ToListExplicit(fafqbamSummaryTreenick, unname = TRUE), height = 5000, width = 2000, fontSize = 15)
+```
+
+
+#David Boone
+```{r byUserFileSummarybooned}
+
+boonedDirectoriesSummary <- directoriesSummary %>%
+  filter(User =="booned") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+dirSummForTreemapbooned <- cSplit(boonedDirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemapbooned[] <- lapply(dirSummForTreemapbooned, as.character)
+dirSummForTreemapbooned[,"FileSizeBytes"] <- lapply(dirSummForTreemapbooned[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemapbooned[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutboonedDirs <- d3tree2(treemap(dirSummForTreemapbooned[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutboonedDirs, file = "boonedDirStructureViz.html", selfcontained = TRUE)
+
+boonedfafqbamSummary <- fafqbamSummary %>%
+  filter(User =="booned") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+fafqbamSummForTreemapbooned <- cSplit(boonedfafqbamSummary, "Filepath", sep = '/')
+
+fafqbamSummForTreemapbooned[] <- lapply(fafqbamSummForTreemapbooned, as.character)
+fafqbamSummForTreemapbooned[,"FileSizeBytes"] <- lapply(fafqbamSummForTreemapbooned[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(fafqbamSummForTreemapbooned[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutboonedfafqbams <- d3tree2(treemap(fafqbamSummForTreemapbooned[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutboonedfafqbams, file = "boonedfafqbamStructureViz.html", selfcontained = TRUE)
+
+```
+
+
+#Zeynep file Summary
+```{r byUserFileSummaryzeynep}
+
+zeynepDirectoriesSummary <- directoriesSummary %>%
+  filter(User =="zeynep") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+dirSummForTreemapzeynep <- cSplit(zeynepDirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemapzeynep[] <- lapply(dirSummForTreemapzeynep, as.character)
+dirSummForTreemapzeynep[,"FileSizeBytes"] <- lapply(dirSummForTreemapzeynep[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemapzeynep[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutzeynepDirs <- d3tree2(treemap(dirSummForTreemapzeynep[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutzeynepDirs, file = "zeynepDirStructureViz.html", selfcontained = TRUE)
+
+zeynepfafqbamSummary <- fafqbamSummary %>%
+  filter(User =="zeynep") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+fafqbamSummForTreemapzeynep <- cSplit(zeynepfafqbamSummary, "Filepath", sep = '/')
+
+fafqbamSummForTreemapzeynep[] <- lapply(fafqbamSummForTreemapzeynep, as.character)
+fafqbamSummForTreemapzeynep[,"FileSizeBytes"] <- lapply(fafqbamSummForTreemapzeynep[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(fafqbamSummForTreemapzeynep[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutzeynepfafqbams <- d3tree2(treemap(fafqbamSummForTreemapzeynep[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutzeynepfafqbams, file = "zeynepfafqbamStructureViz.html", selfcontained = TRUE)
+
+```
+
+
+#MET500 summary
+```{r byUserFileSummaryMET500}
+
+MET500DirectoriesSummary <- directoriesSummary %>%
+  filter(User =="MET500") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+dirSummForTreemapMET500 <- cSplit(MET500DirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemapMET500[] <- lapply(dirSummForTreemapMET500, as.character)
+dirSummForTreemapMET500[,"FileSizeBytes"] <- lapply(dirSummForTreemapMET500[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemapMET500[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutMET500Dirs <- d3tree2(treemap(dirSummForTreemapMET500[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutMET500Dirs, file = "MET500DirStructureViz.html", selfcontained = TRUE)
+
+MET500fafqbamSummary <- fafqbamSummary %>%
+  filter(User =="MET500") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+fafqbamSummForTreemapMET500 <- cSplit(MET500fafqbamSummary, "Filepath", sep = '/')
+
+fafqbamSummForTreemapMET500[] <- lapply(fafqbamSummForTreemapMET500, as.character)
+fafqbamSummForTreemapMET500[,"FileSizeBytes"] <- lapply(fafqbamSummForTreemapMET500[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(fafqbamSummForTreemapMET500[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutMET500fafqbams <- d3tree2(treemap(fafqbamSummForTreemapMET500[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutMET500fafqbams, file = "MET500fafqbamStructureViz2.html", selfcontained = TRUE)
+
+```
+#jahnik -VERY SMALL
+```{r byUserFileSummaryjahnik}
+
+jahnikDirectoriesSummary <- directoriesSummary %>%
+  filter(User =="jahnik") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+dirSummForTreemapjahnik <- cSplit(jahnikDirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemapjahnik[] <- lapply(dirSummForTreemapjahnik, as.character)
+dirSummForTreemapjahnik[,"FileSizeBytes"] <- lapply(dirSummForTreemapjahnik[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemapjahnik[FileSizeBytes >= 1000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutjahnikDirs <- d3tree2(treemap(dirSummForTreemapjahnik[FileSizeBytes >= 1000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutjahnikDirs, file = "jahnikDirStructureViz.html", selfcontained = TRUE)
+
+jahnikfafqbamSummary <- fafqbamSummary %>%
+  filter(User =="jahnik") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+
+#fafqbamSummForTreemapjahnik <- cSplit(jahnikfafqbamSummary, "Filepath", sep = '/')
+#fafqbamSummForTreemapjahnik[] <- lapply(fafqbamSummForTreemapjahnik, as.character)
+#fafqbamSummForTreemapjahnik[,"FileSizeBytes"] <- lapply(fafqbamSummForTreemapjahnik[,"FileSizeBytes"], as.double)
+#
+#
+#columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+#treemap(fafqbamSummForTreemapjahnik[FileSizeBytes >= 1000,], index = columnsOfInterest[1:5], vSize = #'FileSizeBytes', type='index')
+#
+#d3treeoutjahnikfafqbams <- d3tree2(treemap(fafqbamSummForTreemapjahnik[FileSizeBytes >= 1000,], index = #columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+#
+#save_d3_html(d3treeoutjahnikfafqbams, file = "jahnikfafqbamStructureViz.html", selfcontained = TRUE)
+#
+```
+
+
+jaw212 File Summary - Very Small - mostly on groupshares
+```{r byUserFileSummaryjaw212}
+
+jaw212DirectoriesSummary <- directoriesSummary %>%
+  filter(User =="jaw212") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+dirSummForTreemapjaw212 <- cSplit(jaw212DirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemapjaw212[] <- lapply(dirSummForTreemapjaw212, as.character)
+dirSummForTreemapjaw212[,"FileSizeBytes"] <- lapply(dirSummForTreemapjaw212[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemapjaw212[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutjaw212Dirs <- d3tree2(treemap(dirSummForTreemapjaw212[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutjaw212Dirs, file = "jaw212DirStructureViz.html", selfcontained = TRUE)
+
+jaw212fafqbamSummary <- fafqbamSummary %>%
+  filter(User =="jaw212") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+fafqbamSummForTreemapjaw212 <- cSplit(jaw212fafqbamSummary, "Filepath", sep = '/')
+
+fafqbamSummForTreemapjaw212[] <- lapply(fafqbamSummForTreemapjaw212, as.character)
+fafqbamSummForTreemapjaw212[,"FileSizeBytes"] <- lapply(fafqbamSummForTreemapjaw212[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+#treemap(fafqbamSummForTreemapjaw212[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+#d3treeoutjaw212fafqbams <- d3tree2(treemap(fafqbamSummForTreemapjaw212[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutjaw212fafqbams, file = "jaw212fafqbamStructureViz.html", selfcontained = TRUE)
+
+```
+
+
+Nolan File Summary
+```{r byUserFileSummarynolan}
+
+nolanDirectoriesSummary <- directoriesSummary %>%
+  filter(User =="nolan") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+dirSummForTreemapNolan <- cSplit(nolanDirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemapNolan[] <- lapply(dirSummForTreemapNolan, as.character)
+dirSummForTreemapNolan[,"FileSizeBytes"] <- lapply(dirSummForTreemapNolan[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemapNolan[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutNolanDirs <- d3tree2(treemap(dirSummForTreemapNolan[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutNolanDirs, file = "NolanDirStructureViz.html", selfcontained = TRUE)
+
+nolanfafqbamSummary <- fafqbamSummary %>%
+  filter(User =="nolan") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+fafqbamSummForTreemapNolan <- cSplit(nolanfafqbamSummary, "Filepath", sep = '/')
+
+fafqbamSummForTreemapNolan[] <- lapply(fafqbamSummForTreemapNolan, as.character)
+fafqbamSummForTreemapNolan[,"FileSizeBytes"] <- lapply(fafqbamSummForTreemapNolan[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(fafqbamSummForTreemapNolan[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutNolanfafqbams <- d3tree2(treemap(fafqbamSummForTreemapNolan[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutNolanfafqbams, file = "NolanfafqbamStructureViz.html", selfcontained = TRUE)
+
+```
+
+rjw File Summary
+```{r byUserFileSummaryrjw}
+
+rjwDirectoriesSummary <- directoriesSummary %>%
+  filter(User =="rjw") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+dirSummForTreemaprjw <- cSplit(rjwDirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemaprjw[] <- lapply(dirSummForTreemaprjw, as.character)
+dirSummForTreemaprjw[,"FileSizeBytes"] <- lapply(dirSummForTreemaprjw[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemaprjw[FileSizeBytes >= 1000,], index = columnsOfInterest[2:3], vSize = 'FileSizeBytes', type='index')
+
+#d3treeoutrjwDirs <- d3tree2(treemap(dirSummForTreemaprjw[FileSizeBytes >= 1000,], index = columnsOfInterest[3:5], #vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+#
+#save_d3_html(d3treeoutrjwDirs, file = "rjwDirStructureViz.html", selfcontained = TRUE)
+#
+#rjwfafqbamSummary <- fafqbamSummary %>%
+#  filter(User =="rjw") %>%
+#  arrange(desc(FileSizeBytes)) 
+#
+#
+#fafqbamSummForTreemaprjw <- cSplit(rjwfafqbamSummary, "Filepath", sep = '/')
+#
+#fafqbamSummForTreemaprjw[] <- lapply(fafqbamSummForTreemaprjw, as.character)
+#fafqbamSummForTreemaprjw[,"FileSizeBytes"] <- lapply(fafqbamSummForTreemaprjw[,"FileSizeBytes"], as.double)
+#
+#
+#columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+#treemap(fafqbamSummForTreemaprjw[FileSizeBytes >= 1000,], index = columnsOfInterest[2:5], vSize = #'FileSizeBytes', type='index')
+#
+#d3treeoutrjwfafqbams <- d3tree2(treemap(fafqbamSummForTreemaprjw[FileSizeBytes >= 1000,], index = #columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+#
+#save_d3_html(d3treeoutrjwfafqbams, file = "rjwfafqbamStructureViz.html", selfcontained = TRUE)
+#
+```
+
+
+gyanchandani_rekha File Summary
+```{r byUserFileSummarygyanchandani_rekha}
+
+gyanchandani_rekhaDirectoriesSummary <- directoriesSummary %>%
+  filter(User =="gyanchandani_rekha") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+dirSummForTreemapgyanchandani_rekha <- cSplit(gyanchandani_rekhaDirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemapgyanchandani_rekha[] <- lapply(dirSummForTreemapgyanchandani_rekha, as.character)
+dirSummForTreemapgyanchandani_rekha[,"FileSizeBytes"] <- lapply(dirSummForTreemapgyanchandani_rekha[,"FileSizeBytes"], as.double)
+
+ 
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemapgyanchandani_rekha[FileSizeBytes >= 1000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutgyanchandani_rekhaDirs <- d3tree2(treemap(dirSummForTreemapgyanchandani_rekha[FileSizeBytes >= 1000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutgyanchandani_rekhaDirs, file = "gyanchandani_rekhaDirStructureViz.html", selfcontained = TRUE)
+
+gyanchandani_rekhafafqbamSummary <- fafqbamSummary %>%
+  filter(User =="gyanchandani_rekha") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+#fafqbamSummForTreemapgyanchandani_rekha <- cSplit(gyanchandani_rekhafafqbamSummary, "Filepath", sep = '/')
+#
+#fafqbamSummForTreemapgyanchandani_rekha[] <- lapply(fafqbamSummForTreemapgyanchandani_rekha, as.character)
+#fafqbamSummForTreemapgyanchandani_rekha[,"FileSizeBytes"] <- #lapply(fafqbamSummForTreemapgyanchandani_rekha[,"FileSizeBytes"], as.double)
+#
+#
+#columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+#treemap(fafqbamSummForTreemapgyanchandani_rekha[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize #= 'FileSizeBytes', type='index')
+#
+#d3treeoutgyanchandani_rekhafafqbams <- d3tree2(treemap(fafqbamSummForTreemapgyanchandani_rekha[FileSizeBytes >= #100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+#
+#save_d3_html(d3treeoutgyanchandani_rekhafafqbams, file = "gyanchandani_rekhafafqbamStructureViz.html", #selfcontained = TRUE)
+
+```
+
+
+
+shared_RESOURCES File Summary
+```{r byUserFileSummaryshared_RESOURCES}
+
+shared_RESOURCESDirectoriesSummary <- directoriesSummary %>%
+  filter(User =="shared_RESOURCES") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+dirSummForTreemapshared_RESOURCES <- cSplit(shared_RESOURCESDirectoriesSummary, "Filepath", sep = '/')
+
+dirSummForTreemapshared_RESOURCES[] <- lapply(dirSummForTreemapshared_RESOURCES, as.character)
+dirSummForTreemapshared_RESOURCES[,"FileSizeBytes"] <- lapply(dirSummForTreemapshared_RESOURCES[,"FileSizeBytes"], as.double)
+
+
+columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+treemap(dirSummForTreemapshared_RESOURCES[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = 'FileSizeBytes', type='index')
+
+d3treeoutshared_RESOURCESDirs <- d3tree2(treemap(dirSummForTreemapshared_RESOURCES[FileSizeBytes >= 100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+
+#save_d3_html(d3treeoutshared_RESOURCESDirs, file = "shared_RESOURCESDirStructureViz.html", selfcontained = TRUE)
+
+shared_RESOURCESfafqbamSummary <- fafqbamSummary %>%
+  filter(User =="shared_RESOURCES") %>%
+  arrange(desc(FileSizeBytes)) 
+
+
+#fafqbamSummForTreemapshared_RESOURCES <- cSplit(shared_RESOURCESfafqbamSummary, "Filepath", sep = '/')
+#
+#fafqbamSummForTreemapshared_RESOURCES[] <- lapply(fafqbamSummForTreemapshared_RESOURCES, as.character)
+#fafqbamSummForTreemapshared_RESOURCES[,"FileSizeBytes"] <- #lapply(fafqbamSummForTreemapshared_RESOURCES[,"FileSizeBytes"], as.double)
+#
+#
+#columnsOfInterest <- c(paste0('Filepath_0', 7:9), paste0('Filepath_',10:18))
+#treemap(fafqbamSummForTreemapshared_RESOURCES[FileSizeBytes >= 100000,], index = columnsOfInterest[1:5], vSize = #'FileSizeBytes', type='index')
+#
+#d3treeoutshared_RESOURCESfafqbams <- d3tree2(treemap(fafqbamSummForTreemapshared_RESOURCES[FileSizeBytes >= #100000,], index = columnsOfInterest[1:7], vSize = 'FileSizeBytes', type='index'), root = 'jaw212')
+#
+#save_d3_html(d3treeoutshared_RESOURCESfafqbams, file = "shared_RESOURCESfafqbamStructureViz.html", selfcontained #= TRUE)
+#
+```
+
+
+
+
+
+
